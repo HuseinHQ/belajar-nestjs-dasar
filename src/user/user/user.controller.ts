@@ -4,13 +4,19 @@ import {
   Get,
   Header,
   HttpCode,
+  HttpException,
   type HttpRedirectResponse,
   Inject,
+  Param,
+  ParseIntPipe,
   Post,
   Query,
   Redirect,
   Req,
   Res,
+  UseGuards,
+  UseInterceptors,
+  UsePipes,
 } from '@nestjs/common';
 import type { Response, Request } from 'express';
 import { UserService } from './user.service';
@@ -18,9 +24,21 @@ import { Connection } from '../connection/connection';
 import { MailService } from '../mail/mail.service';
 import { UserRepository } from '../user-repository/user-repository';
 import { MemberService } from '../member/member.service';
-import { User } from 'generated/prisma';
+import { type User } from 'generated/prisma';
+import { UserErrors } from 'src/common/constants/errors/user.error';
+import {
+  LoginUserRequest,
+  loginUserRequestValidation,
+} from 'src/model/login.model';
+import { ValidationPipe } from 'src/validation/validation.pipe';
+import { TimeInterceptor } from 'src/time/time.interceptor';
+import { Auth } from 'src/auth/auth.decorator';
+import { RoleGuard } from 'src/role/role.guard';
+import { Roles } from 'src/role/role.decorator';
 
 @Controller('/api/users')
+@UseInterceptors(TimeInterceptor)
+@UseGuards(RoleGuard)
 export class UserController {
   // Cara ke 1 untuk dependency injection
   constructor(
@@ -35,11 +53,40 @@ export class UserController {
   // @Inject()
   // private service: UserService;
 
+  @Get()
+  async getAll(@Query('search') search?: string) {
+    const users = await this.userRepository.getAll(search);
+    return {
+      code: 200,
+      data: users,
+    };
+  }
+
+  @Post('/login')
+  @UsePipes(new ValidationPipe(loginUserRequestValidation))
+  @Header('Content-Type', 'application/json')
+  login(@Body() request: LoginUserRequest) {
+    return {
+      code: 200,
+      data: request,
+    };
+  }
+
   @Post('/create')
+  // @UseFilters(ZodExceptionFilter)
   async create(
     @Body('first_name') firstName: string,
-    @Body('last_name') lastName: string,
+    @Body('last_name') lastName?: string,
   ): Promise<User> {
+    if (!firstName) {
+      throw new HttpException(
+        {
+          code: 400,
+          errors: 'First name is required',
+        },
+        400,
+      );
+    }
     return await this.userRepository.save(firstName, lastName);
   }
 
@@ -55,9 +102,10 @@ export class UserController {
   }
 
   @Get('/hello')
+  // @UseFilters(ZodExceptionFilter)
   sayHello(
     @Query('first_name') firstName: string,
-    @Query('last_name') lastName: string,
+    @Query('last_name') lastName?: string,
   ): string {
     return this.service.sayHello(firstName, lastName);
   }
@@ -102,9 +150,24 @@ export class UserController {
     return 'GET';
   }
 
+  @Get('/current')
+  @Roles(['admin', 'operator'])
+  current(@Auth() user: User) {
+    return {
+      code: 200,
+      data: user,
+    };
+  }
+
   @Get('/:id')
-  getById(@Req() request: Request): string {
-    return `GET ${request.params.id}`;
+  async getById(@Param('id', ParseIntPipe) id: number) {
+    const user = await this.userRepository.getById(id);
+    if (!user) throw new HttpException(UserErrors.NOT_FOUND, 404);
+
+    return {
+      code: 200,
+      data: user,
+    };
   }
 
   @Post()
